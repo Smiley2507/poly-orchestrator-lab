@@ -1,0 +1,42 @@
+# Rendered at container start by the official nginx entrypoint (envsubst).
+# BACKEND_HOST / BACKEND_PORT / DNS_RESOLVER come from environment variables,
+# so the same image works with a Compose service name now and ECS Service
+# Connect / Cloud Map later.
+
+server {
+    listen       ${FRONTEND_PORT};
+    server_name  _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Deferred DNS resolution: the backend name is looked up per request
+    # instead of at startup, so nginx survives backend restarts.
+    resolver ${DNS_RESOLVER} valid=10s ipv6=off;
+    set $backend_upstream http://${BACKEND_HOST}:${BACKEND_PORT};
+
+    # Frontend's own health endpoint (handy for an ALB target group later)
+    location = /healthz {
+        access_log off;
+        add_header Content-Type application/json;
+        return 200 '{"status":"healthy"}';
+    }
+
+    location /api/ {
+        proxy_pass $backend_upstream;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Proxy the backend health endpoint too, for easy manual checks
+    location = /health {
+        proxy_pass $backend_upstream/health;
+    }
+
+    # Single-page app fallback
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
