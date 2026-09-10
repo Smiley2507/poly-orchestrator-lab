@@ -9,6 +9,8 @@ class ProductOut(BaseModel):
     name: str
     description: str
     price: float
+    image_url: str
+    in_stock: bool
 
 
 class HealthOut(BaseModel):

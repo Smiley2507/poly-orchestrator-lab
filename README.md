@@ -1,13 +1,27 @@
 # ShopNow
 
-A deliberately small 3-tier demo application for the **Poly-Orchestrator** DevOps lab.
-It runs locally with Docker Compose today and is built to be deployed to
+A small but realistic e-commerce demo application for the **Poly-Orchestrator** DevOps
+lab. It runs locally with Docker Compose today and is built to be deployed to
 **Amazon ECS Fargate** in a later phase — no AWS-specific code or configuration is
 baked in anywhere.
 
-ShopNow shows a list of products. That's it. No auth, no cart, no payments.
-The interesting part is the plumbing: a React frontend, a FastAPI backend,
-PostgreSQL for persistence, and Redis as a read cache.
+ShopNow is a product catalog with product detail pages and a client-side shopping
+cart. No auth, no accounts, no payments, no checkout, no admin dashboard. The
+interesting part is the plumbing: a React frontend, a FastAPI backend, PostgreSQL
+for persistence, and Redis as a read cache — enough real functionality to make that
+plumbing genuinely necessary.
+
+## Features
+
+- Product catalog homepage with a modest hero and a responsive product grid
+  (4 columns desktop / 3 tablet / 2 mobile)
+- Client-side search that filters the catalog by name/description
+- Product detail page (`/products/:id`) loaded live from the backend API
+- Quantity selector and Add to Cart on both the catalog and the detail page
+- Client-side shopping cart (`/cart`): add, remove, increase/decrease quantity,
+  subtotal, item count, empty-cart state — persisted in `localStorage`
+- Loading, error, empty, not-found and out-of-stock states throughout
+- Local static product images (SVG) so the whole app works fully offline in Docker
 
 ## Architecture
 
@@ -52,12 +66,22 @@ works later behind an ALB with ECS Service Connect / Cloud Map — only the
 ```text
 shopnow/
 ├── frontend/
-│   ├── public/favicon.svg
+│   ├── public/
+│   │   ├── favicon.svg
+│   │   └── products/            # local static product images (SVG)
 │   ├── src/
-│   │   ├── App.tsx             # product list UI, loading + error states
-│   │   ├── api.ts              # fetch helper, configurable API base URL
-│   │   ├── index.css           # simple hand-written CSS
-│   │   ├── main.tsx
+│   │   ├── App.tsx               # layout + route table
+│   │   ├── api.ts                 # fetch helpers, configurable API base URL
+│   │   ├── cart/CartContext.tsx   # cart state + localStorage persistence
+│   │   ├── components/
+│   │   │   ├── Header.tsx         # nav, search, cart icon/count
+│   │   │   └── ProductCard.tsx
+│   │   ├── pages/
+│   │   │   ├── Home.tsx           # hero + product grid + search filter
+│   │   │   ├── ProductDetail.tsx  # GET /api/products/{id}
+│   │   │   └── Cart.tsx
+│   │   ├── index.css              # hand-written CSS, no UI framework
+│   │   ├── main.tsx                # router + cart provider
 │   │   └── vite-env.d.ts
 │   ├── index.html
 │   ├── nginx.conf.template     # rendered at container start from env vars
@@ -87,11 +111,19 @@ shopnow/
 
 | Tier    | Technology |
 |---------|------------|
-| Frontend | React 18, Vite, TypeScript, plain CSS, nginx (runtime) |
+| Frontend | React 18, React Router, Vite, TypeScript, plain CSS, nginx (runtime) |
 | Backend  | Python 3.12, FastAPI, Uvicorn, SQLAlchemy 2.x, psycopg 3, redis-py |
 | Database | PostgreSQL 16 (official image) |
 | Cache    | Redis 7 (official image) |
 | Runtime  | Docker, Docker Compose |
+
+## Product images
+
+Product images are plain SVG files committed under `frontend/public/products/` and
+served by nginx alongside the rest of the static build. The backend only stores a
+path (`image_url`, e.g. `/products/laptop.svg`); it never generates or proxies
+images. This keeps the demo fully self-contained — no external image host, no
+image-processing service, and no network dependency at build or run time.
 
 ## Running it
 
@@ -121,6 +153,21 @@ docker compose logs -f backend      # backend only — shows CACHE HIT / CACHE M
 docker compose ps                   # service + health status
 ```
 
+## Pages / routes (frontend)
+
+| Route            | Page                                                           |
+|-------------------|-----------------------------------------------------------------|
+| `/`               | Home — hero + product grid, client-side search over the loaded catalog |
+| `/products/:id`   | Product detail — image, price, description, stock, quantity selector, Add to Cart. Data comes from `GET /api/products/{id}`, nothing is hardcoded. |
+| `/cart`           | Shopping cart — line items, quantity controls, subtotal, empty-cart state |
+
+React Router handles client-side navigation; nginx falls back unmatched paths to
+`index.html` (`try_files … /index.html`) so refreshing `/products/3` or `/cart`
+directly still works.
+
+The cart itself is pure frontend state (React context + `localStorage`) — there is
+no cart/order table or endpoint on the backend.
+
 ## API endpoints
 
 | Method | Path                 | Description |
@@ -132,16 +179,33 @@ docker compose ps                   # service + health status
 
 Interactive docs are available at <http://localhost:8000/docs>.
 
+## Database model
+
+One table, `products`:
+
+| Column        | Type          | Notes |
+|---------------|---------------|-------|
+| `id`          | integer, PK   | |
+| `name`        | varchar(120)  | |
+| `description` | text          | |
+| `price`       | numeric(10,2) | |
+| `image_url`   | varchar(255)  | Path to a static image served by the frontend, e.g. `/products/laptop.svg` |
+| `in_stock`    | boolean       | Drives the availability badge and disables Add to Cart when false |
+
 ## How PostgreSQL is used
 
-- One table, `products`, with `id`, `name`, `description`, `price`.
 - On startup the backend retries the connection for up to ~60 seconds (so a slow
   database start is not fatal), calls `create_all()`, and — only if the table is
-  empty — inserts five sample products: Laptop, Wireless Mouse, Mechanical
-  Keyboard, Monitor, USB-C Hub.
+  empty — inserts eight sample products: Aurora 14 Laptop, Wireless Mouse,
+  Mechanical Keyboard, 27" QHD Monitor, USB-C Hub, Wireless Headphones, HD Webcam,
+  and a Portable SSD (seeded as out-of-stock, to demonstrate that state).
 - No Alembic. For a single table in a lab app, migrations would be more machinery
   than value.
 - Data lives in the `postgres_data` named volume, so it survives `docker compose down`.
+  Because the schema gained `image_url` / `in_stock` columns in this revision, a
+  volume created by an older version of this app needs `docker compose down -v`
+  once before starting the new image (fresh columns need a fresh seed, not a
+  migration, in a lab app like this).
 
 ## How Redis caching works
 
