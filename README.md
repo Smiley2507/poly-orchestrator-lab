@@ -1,284 +1,28 @@
 # Poly-Orchestrator — AWS ECS Deployment
 
-A containerized e-commerce application deployed on **Amazon ECS using AWS Fargate**.
+Poly-Orchestrator is a containerized three-tier e-commerce application deployed on **Amazon ECS using AWS Fargate**.
 
-The project demonstrates how a multi-container application running locally with Docker Compose can be deployed to AWS using managed container, networking, database, and caching services.
+The project demonstrates how a multi-container application can be moved from a local Docker Compose environment to AWS using managed services such as **Amazon ECS, Amazon ECR, Application Load Balancer, Amazon RDS, ElastiCache Redis, and Terraform**.
 
-**Current deployment:** Amazon ECS / AWS Fargate
-**AWS Region:** `eu-west-1`
-**Environment:** Lab / Demonstration
+The deployment uses a public Application Load Balancer for external traffic, ECS Service Connect for internal service communication, and private networking for the application and data services. The goal of the lab is to practice container deployment, AWS networking, service discovery, load balancing, and infrastructure provisioning with Terraform.
 
----
+## Architecture
 
-## Table of Contents
+![Poly-Orchestrator AWS Architecture](docs/ecs-architecture-diagram.png)
 
-* [Project Overview](#project-overview)
-* [Architecture](#architecture)
-* [Technology Stack](#technology-stack)
-* [AWS Infrastructure](#aws-infrastructure)
-* [ECS Deployment](#ecs-deployment)
-* [Traffic and Service Communication](#traffic-and-service-communication)
-* [Deployment Process](#deployment-process)
-* [Application Verification](#application-verification)
-* [Troubleshooting](#troubleshooting)
-* [Lessons Learned](#lessons-learned)
-* [Project Structure](#project-structure)
-* [Next Step: EKS](#next-step-eks)
+The application is deployed inside an AWS VPC using ECS Fargate. An internet-facing Application Load Balancer provides the public entry point and routes frontend and API traffic to their respective ECS services.
 
----
+The frontend communicates with the backend through ECS Service Connect. The backend privately accesses Amazon RDS PostgreSQL for persistent data and Amazon ElastiCache Redis for caching. The ECS tasks and data services are deployed in private subnets, while the ALB is placed in public subnets.
 
-# Project Overview
+## 1. Containerization & Local Testing
 
-**Poly-Orchestrator** is a small e-commerce application consisting of:
-
-* React/Vite frontend
-* FastAPI backend
-* PostgreSQL database
-* Redis cache
-
-The application was first developed and tested locally using Docker Compose.
-
-For the AWS deployment, the application containers run on ECS Fargate, while PostgreSQL and Redis are provided by managed AWS services.
-
-| Local Component   | AWS Deployment            |
-| ----------------- | ------------------------- |
-| Frontend          | ECS Fargate               |
-| Backend           | ECS Fargate               |
-| PostgreSQL        | Amazon RDS                |
-| Redis             | Amazon ElastiCache        |
-| Docker images     | Amazon ECR                |
-| External traffic  | Application Load Balancer |
-| Service discovery | ECS Service Connect       |
-
----
-
-# Architecture
-
-![Poly-Orchestrator AWS ECS Architecture](docs/ecs-architecture-diagram.png)
-
-The application is deployed inside an AWS VPC using public and private subnets. The **Application Load Balancer** provides the public entry point and routes `/api/*` requests to the backend ECS service while sending other requests to the frontend service.
-
-The frontend and backend run as separate ECS Fargate services. **ECS Service Connect** provides internal service-to-service communication, while the backend connects privately to **Amazon RDS PostgreSQL** and **Amazon ElastiCache Redis**. The frontend does not directly access either data service.
-
-### Application Screenshot
-
-![ShopNow Application](docs/screenshots/application.png)
-
----
-
-# Technology Stack
-
-## Application
-
-| Component           | Technology                |
-| ------------------- | ------------------------- |
-| Frontend            | React + Vite + TypeScript |
-| Backend             | FastAPI                   |
-| Database            | PostgreSQL                |
-| Cache               | Redis                     |
-| Containers          | Docker                    |
-| Local orchestration | Docker Compose            |
-
-## AWS
-
-| Service                   | Purpose                                      |
-| ------------------------- | -------------------------------------------- |
-| Amazon ECS                | Container orchestration                      |
-| AWS Fargate               | Container compute                            |
-| Amazon ECR                | Container image registry                     |
-| Application Load Balancer | External traffic routing                     |
-| Amazon RDS                | Managed PostgreSQL                           |
-| Amazon ElastiCache        | Managed Redis                                |
-| Amazon VPC                | Network isolation                            |
-| CloudWatch                | Container logging                            |
-| ECS Service Connect       | Service discovery and internal communication |
-
----
-
-# AWS Infrastructure
-
-The AWS infrastructure is provisioned using **Terraform**.
-
-The main resources are:
-
-* VPC
-* Public and private subnets
-* Internet Gateway
-* NAT Gateway
-* Route tables
-* Security groups
-* ECR repositories
-* Application Load Balancer
-* ALB target groups
-* Amazon RDS PostgreSQL
-* Amazon ElastiCache Redis
-
-### Network Layout
-
-```text
-VPC: 10.0.0.0/16
-
-Public Subnets
-├── 10.0.1.0/24
-└── 10.0.2.0/24
-        │
-        └── Application Load Balancer
-
-Private Subnets
-├── 10.0.11.0/24
-└── 10.0.12.0/24
-        │
-        ├── ECS Frontend
-        ├── ECS Backend
-        ├── RDS PostgreSQL
-        └── ElastiCache Redis
-```
-
-The ALB is placed in the public subnets, while ECS tasks and data services remain in the private subnets.
-
-### Terraform Structure
-
-```text
-terraform/
-├── alb.tf
-├── ecr.tf
-├── elasticache.tf
-├── rds.tf
-├── security-groups.tf
-├── vpc.tf
-├── variables.tf
-├── outputs.tf
-├── provider.tf
-├── versions.tf
-└── terraform.tfvars.example
-```
-
----
-
-# ECS Deployment
-
-The application runs in the ECS cluster:
-
-```text
-poly-orchestrator-cluster
-```
-
-Two ECS services are deployed:
-
-```text
-poly-orchestrator-frontend-service
-poly-orchestrator-backend-service
-```
-
-Both services run on **AWS Fargate** with a desired count of two tasks.
-
-### Frontend Service
-
-```text
-Container: frontend
-Port: 3000
-Desired tasks: 2
-```
-
-The frontend serves the compiled React application using a lightweight Node.js server.
-
-### Backend Service
-
-```text
-Container: backend
-Port: 8000
-Desired tasks: 2
-```
-
-The FastAPI backend exposes:
-
-```text
-GET /health
-GET /api/products
-GET /api/products/{id}
-```
-
-### Health Checks
-
-The frontend is checked using:
-
-```text
-GET /
-```
-
-The backend is checked using:
-
-```text
-GET /health
-```
-
-These checks allow ECS and the ALB to determine whether tasks are healthy and ready to receive traffic.
-
----
-
-# Traffic and Service Communication
-
-The Application Load Balancer provides the single public entry point.
-
-```text
-HTTP :80
-```
-
-Path-based routing is configured as:
-
-```text
-/api/*  → Backend ECS :8000
-/*      → Frontend ECS :3000
-```
-
-The frontend uses the relative API path:
-
-```text
-/api
-```
-
-This allows browser requests to use the same ALB endpoint as the frontend.
-
-ECS Service Connect provides internal communication between the frontend and backend:
-
-```text
-Frontend ECS
-     │
-     │ Service Connect
-     ▼
-Backend ECS
-```
-
-The backend then accesses the data services privately:
-
-```text
-Backend ECS → RDS PostgreSQL :5432
-Backend ECS → ElastiCache Redis :6379
-```
-
-The frontend does **not** connect directly to RDS or Redis.
-
-### ALB Listener
-
-![ALB Listener Rules](docs/screenshots/alb-listener.png)
-
-### Service Connect
-
-![ECS Service Connect](docs/screenshots/service-connect.png)
-
----
-
-# Deployment Process
-
-## 1. Test Locally
-
-The application was first verified using Docker Compose:
+The frontend and backend were containerized using Docker, with Docker Compose used to run the complete application locally.
 
 ```bash
 docker compose up --build
 ```
 
-This starts:
+The local environment consists of:
 
 ```text
 Frontend
@@ -286,92 +30,104 @@ Backend
 PostgreSQL
 Redis
 ```
+
+![Local Application](docs/screenshots/docker-compose.png)
+
 ---
 
-## 2. Provision AWS Infrastructure
+## 2. Infrastructure with Terraform
 
-Terraform provisions the required AWS infrastructure:
+Terraform was used to provision the AWS infrastructure required by the application.
+
+The infrastructure includes:
+
+* VPC and subnets
+* Internet Gateway and NAT Gateway
+* Security groups
+* ECR repositories
+* Application Load Balancer
+* RDS PostgreSQL
+* ElastiCache Redis
 
 ```bash
 cd terraform
-
 terraform init
 terraform plan
 terraform apply
 ```
+
+![Terraform Apply](docs/screenshots/terraform.png)
+
 ---
 
-## 3. Build and Push Images
+## 3. Amazon ECR
 
-The application images are built locally and pushed to Amazon ECR.
-
-```bash
-docker build -t poly-orchestrator-backend ./backend
-docker build -t poly-orchestrator-frontend ./frontend
-```
-
-Example image tags:
+The frontend and backend Docker images were pushed to separate Amazon ECR repositories.
 
 ```text
-poly-orchestrator-backend:v1
-poly-orchestrator-frontend:v1
-poly-orchestrator-frontend:v2
+poly-orchestrator-frontend
+poly-orchestrator-backend
 ```
 
-![ECR Images](docs/screenshots/ecr.png)
+Versioned image tags were used for deployment.
+
+![ECR Repositories](docs/screenshots/ecr.png)
 
 ---
 
-## 4. Deploy ECS Services
+## 4. ECS Deployment
 
-Separate ECS task definitions were created for the frontend and backend.
+The application was deployed to an ECS cluster using AWS Fargate.
 
-The task definitions specify:
+Two services were created:
 
-* Container image
-* CPU and memory
-* Port mappings
-* Environment variables
-* Health checks
-* CloudWatch logging
-* IAM roles
+```text
+poly-orchestrator-frontend-service
+poly-orchestrator-backend-service
+```
 
-The task definitions are used by the ECS services.
+Each service runs two tasks for basic redundancy.
+
+The frontend listens on port `3000`, while the backend listens on port `8000`.
 
 ![ECS Services](docs/screenshots/ecs-services.png)
 
 ---
 
-## 5. Configure Load Balancing
+## 5. Load Balancing & Service Connect
 
-The ALB uses two target groups:
+The Application Load Balancer routes traffic based on the request path:
 
-| Service  | Target Group                       | Port | Health Check |
-| -------- | ---------------------------------- | ---: | ------------ |
-| Frontend | `poly-orchestrator-frontend-v2-tg` | 3000 | `/`          |
-| Backend  | `poly-orchestrator-backend-tg`     | 8000 | `/health`    |
+```text
+/api/*  → Backend :8000
+/*      → Frontend :3000
+```
+
+ECS Service Connect provides internal communication between the frontend and backend services.
+
+The backend then connects privately to:
+
+```text
+RDS PostgreSQL :5432
+ElastiCache Redis :6379
+```
+
+![ALB Listener Rules](docs/screenshots/alb-listener.png)
 
 ---
 
-# Application Verification
+## 6. Final Validation
 
-After deployment, the application was tested through the public ALB endpoint.
+The deployed application was accessed through the ALB DNS name.
 
-### Frontend
+The following were verified:
 
-```text
-http://<ALB-DNS>/
-```
-
-### Backend API
-
-```text
-http://<ALB-DNS>/api/products
-```
-
-### Target Health
-
-Both frontend and backend target groups were checked to confirm that ECS tasks were registered and healthy.
+* Frontend loads successfully
+* Backend API responds through `/api/products`
+* Frontend communicates with the backend
+* Backend connects to PostgreSQL
+* Redis caching works
+* ALB target groups report healthy ECS tasks
 
 ![Healthy Target Groups](docs/screenshots/target-health.png)
 
@@ -379,173 +135,42 @@ Both frontend and backend target groups were checked to confirm that ECS tasks w
 
 ---
 
-# Troubleshooting
+## 7. Troubleshooting
 
-The deployment involved several issues that demonstrated important ECS and ALB concepts.
+During deployment, several issues were encountered and resolved:
 
-## Frontend Nginx — 502 Bad Gateway
+* Frontend Nginx returned `502 Bad Gateway`, so API routing was moved to the ALB.
+* The frontend target group could not reach port `3000` because of a missing security-group rule.
+* The backend target group could not reach port `8000` for the same reason.
+* The backend target group initially had no targets because it was not attached to the ECS service.
 
-The initial frontend image used Nginx to proxy `/api` requests to the backend.
-
-Although Service Connect was working, Nginx returned `502 Bad Gateway`.
-
-The frontend was simplified to serve the React application directly, while the ALB became responsible for API routing:
-
-```text
-/api/* → Backend
-/*     → Frontend
-```
+These issues highlighted the importance of correctly aligning **ECS port mappings, target groups, ALB rules, health checks, and security groups**.
 
 ---
 
-## Frontend Target Health Timeout
+## 8. Lessons Learned
 
-After moving the frontend to port `3000`, the ALB could not reach the frontend tasks.
-
-The missing rule was:
-
-```text
-ALB SG → ECS SG → TCP 3000
-```
-
-After adding the rule, the frontend targets became healthy.
+* ECS services, ALB target groups, and security groups must be configured consistently.
+* An ALB `503` can indicate that there are no healthy targets rather than an application failure.
+* Service Connect is useful for internal ECS service communication, while the ALB handles external traffic.
+* Managed services such as RDS and ElastiCache reduce the infrastructure that must be managed inside ECS.
+* ECS Fargate allows containers to run without managing the underlying servers.
 
 ---
 
-## Backend Target Health Timeout
-
-The backend tasks were running, but the ALB reported that port `8000` was unhealthy.
-
-The missing rule was:
-
-```text
-ALB SG → ECS SG → TCP 8000
-```
-
-After adding the rule and deploying new backend tasks, the targets became healthy.
-
----
-
-## Backend Target Group Had No Targets
-
-The backend target group initially had no registered targets because the ECS backend service was not associated with the target group.
-
-The service was updated to connect:
-
-```text
-backend:8000
-        ↓
-poly-orchestrator-backend-tg
-```
-
-ECS then registered the backend tasks.
-
----
-
-# Lessons Learned
-
-### ALB 503 does not always mean the application is broken
-
-A `503 Service Unavailable` can occur when the ALB has no healthy targets.
-
-Checking target-group health is therefore an important troubleshooting step.
-
-### ECS and ALB configuration must align
-
-The following components must work together:
-
-```text
-Container port
-      ↓
-ECS port mapping
-      ↓
-ECS service
-      ↓
-Target group
-      ↓
-ALB listener
-      ↓
-Security group
-```
-
-A mismatch can prevent traffic from reaching the application.
-
-### Service Connect and ALB have different roles
-
-The ALB handles external browser traffic and path-based routing.
-
-Service Connect provides internal ECS service discovery and communication.
-
-### Managed services simplify the deployment
-
-RDS and ElastiCache replace the local PostgreSQL and Redis containers, allowing ECS to focus on the application containers.
-
----
-
-# Project Structure
+## Project Structure
 
 ```text
 poly-orchestrator-lab/
-│
 ├── backend/
-│   ├── app/
-│   ├── Dockerfile
-│   └── requirements.txt
-│
 ├── frontend/
-│   ├── src/
-│   ├── Dockerfile
-│   ├── package.json
-│   └── ...
-│
 ├── terraform/
-│   ├── alb.tf
-│   ├── ecr.tf
-│   ├── elasticache.tf
-│   ├── rds.tf
-│   ├── security-groups.tf
-│   ├── vpc.tf
-│   └── ...
-│
+├── docs/
 ├── docker-compose.yml
 └── README.md
 ```
-
 ---
 
-# Next Step: EKS
+## Next Step
 
-The next phase is to deploy the same application using **Amazon EKS**.
-
-The application architecture will remain largely the same:
-
-```text
-Frontend
-Backend
-RDS PostgreSQL
-ElastiCache Redis
-```
-
-The main difference will be the orchestration platform.
-
-### ECS
-
-```text
-AWS
-└── ECS
-    └── Fargate
-        ├── Frontend
-        └── Backend
-```
-
-### EKS
-
-```text
-AWS
-└── EKS
-    └── Kubernetes
-        ├── Frontend Deployment
-        └── Backend Deployment
-```
-
-This will allow the project to compare ECS/Fargate with Kubernetes running on EKS using the same application.
+The next phase of the project is to deploy the same application using **Amazon EKS** and compare the ECS/Fargate and Kubernetes approaches.
