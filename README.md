@@ -1,290 +1,551 @@
-# ShopNow
+# Poly-Orchestrator — AWS ECS Deployment
 
-A small but realistic e-commerce demo application for the **Poly-Orchestrator** DevOps
-lab. It runs locally with Docker Compose today and is built to be deployed to
-**Amazon ECS Fargate** in a later phase — no AWS-specific code or configuration is
-baked in anywhere.
+A containerized e-commerce application deployed on **Amazon ECS using AWS Fargate**.
 
-ShopNow is a product catalog with product detail pages and a client-side shopping
-cart. No auth, no accounts, no payments, no checkout, no admin dashboard. The
-interesting part is the plumbing: a React frontend, a FastAPI backend, PostgreSQL
-for persistence, and Redis as a read cache — enough real functionality to make that
-plumbing genuinely necessary.
+The project demonstrates how a multi-container application running locally with Docker Compose can be deployed to AWS using managed container, networking, database, and caching services.
 
-## Features
+**Current deployment:** Amazon ECS / AWS Fargate
+**AWS Region:** `eu-west-1`
+**Environment:** Lab / Demonstration
 
-- Product catalog homepage with a modest hero and a responsive product grid
-  (4 columns desktop / 3 tablet / 2 mobile)
-- Client-side search that filters the catalog by name/description
-- Product detail page (`/products/:id`) loaded live from the backend API
-- Quantity selector and Add to Cart on both the catalog and the detail page
-- Client-side shopping cart (`/cart`): add, remove, increase/decrease quantity,
-  subtotal, item count, empty-cart state — persisted in `localStorage`
-- Loading, error, empty, not-found and out-of-stock states throughout
-- Local static product images (SVG) so the whole app works fully offline in Docker
+---
 
-## Architecture
+## Table of Contents
+
+* [Project Overview](#project-overview)
+* [Architecture](#architecture)
+* [Technology Stack](#technology-stack)
+* [AWS Infrastructure](#aws-infrastructure)
+* [ECS Deployment](#ecs-deployment)
+* [Traffic and Service Communication](#traffic-and-service-communication)
+* [Deployment Process](#deployment-process)
+* [Application Verification](#application-verification)
+* [Troubleshooting](#troubleshooting)
+* [Lessons Learned](#lessons-learned)
+* [Project Structure](#project-structure)
+* [Next Step: EKS](#next-step-eks)
+
+---
+
+# Project Overview
+
+**Poly-Orchestrator** is a small e-commerce application consisting of:
+
+* React/Vite frontend
+* FastAPI backend
+* PostgreSQL database
+* Redis cache
+
+The application was first developed and tested locally using Docker Compose.
+
+For the AWS deployment, the application containers run on ECS Fargate, while PostgreSQL and Redis are provided by managed AWS services.
+
+| Local Component   | AWS Deployment            |
+| ----------------- | ------------------------- |
+| Frontend          | ECS Fargate               |
+| Backend           | ECS Fargate               |
+| PostgreSQL        | Amazon RDS                |
+| Redis             | Amazon ElastiCache        |
+| Docker images     | Amazon ECR                |
+| External traffic  | Application Load Balancer |
+| Service discovery | ECS Service Connect       |
+
+---
+
+# Architecture
+
+![Poly-Orchestrator AWS ECS Architecture](docs/ecs-architecture-diagram.png)
+
+The application is deployed inside an AWS VPC using public and private subnets. The **Application Load Balancer** provides the public entry point and routes `/api/*` requests to the backend ECS service while sending other requests to the frontend service.
+
+The frontend and backend run as separate ECS Fargate services. **ECS Service Connect** provides internal service-to-service communication, while the backend connects privately to **Amazon RDS PostgreSQL** and **Amazon ElastiCache Redis**. The frontend does not directly access either data service.
+
+### Application Screenshot
+
+![ShopNow Application](docs/screenshots/application.png)
+
+---
+
+# Technology Stack
+
+## Application
+
+| Component           | Technology                |
+| ------------------- | ------------------------- |
+| Frontend            | React + Vite + TypeScript |
+| Backend             | FastAPI                   |
+| Database            | PostgreSQL                |
+| Cache               | Redis                     |
+| Containers          | Docker                    |
+| Local orchestration | Docker Compose            |
+
+## AWS
+
+| Service                   | Purpose                                      |
+| ------------------------- | -------------------------------------------- |
+| Amazon ECS                | Container orchestration                      |
+| AWS Fargate               | Container compute                            |
+| Amazon ECR                | Container image registry                     |
+| Application Load Balancer | External traffic routing                     |
+| Amazon RDS                | Managed PostgreSQL                           |
+| Amazon ElastiCache        | Managed Redis                                |
+| Amazon VPC                | Network isolation                            |
+| CloudWatch                | Container logging                            |
+| ECS Service Connect       | Service discovery and internal communication |
+
+---
+
+# AWS Infrastructure
+
+The AWS infrastructure is provisioned using **Terraform**.
+
+The main resources are:
+
+* VPC
+* Public and private subnets
+* Internet Gateway
+* NAT Gateway
+* Route tables
+* Security groups
+* ECR repositories
+* Application Load Balancer
+* ALB target groups
+* Amazon RDS PostgreSQL
+* Amazon ElastiCache Redis
+
+### Network Layout
 
 ```text
-                Frontend  (React + Vite, served by nginx)
-                   │
-                   ▼
-              Backend API  (FastAPI + Uvicorn)
-                │      │
-                ▼      ▼
-           PostgreSQL  Redis
+VPC: 10.0.0.0/16
+
+Public Subnets
+├── 10.0.1.0/24
+└── 10.0.2.0/24
+        │
+        └── Application Load Balancer
+
+Private Subnets
+├── 10.0.11.0/24
+└── 10.0.12.0/24
+        │
+        ├── ECS Frontend
+        ├── ECS Backend
+        ├── RDS PostgreSQL
+        └── ElastiCache Redis
 ```
 
-Request flow for `GET /api/products`:
+The ALB is placed in the public subnets, while ECS tasks and data services remain in the private subnets.
+
+### Terraform Structure
 
 ```text
-Frontend
-   ↓
-Backend
-   ↓
-Redis
-   │
-   ├── cache hit  → return cached products
-   │
-   └── cache miss
-          ↓
-       PostgreSQL
-          ↓
-       store in Redis (TTL 60s)
-          ↓
-       return products
+terraform/
+├── alb.tf
+├── ecr.tf
+├── elasticache.tf
+├── rds.tf
+├── security-groups.tf
+├── vpc.tf
+├── variables.tf
+├── outputs.tf
+├── provider.tf
+├── versions.tf
+└── terraform.tfvars.example
 ```
 
-In Docker Compose the browser talks to the **frontend** origin, and nginx proxies
-`/api/*` and `/health` to the `backend` service by its Compose service name.
-That keeps the browser out of the container network and means the same image
-works later behind an ALB with ECS Service Connect / Cloud Map — only the
-`BACKEND_HOST` environment variable changes.
+---
 
-## Project structure
+# ECS Deployment
+
+The application runs in the ECS cluster:
 
 ```text
-shopnow/
-├── frontend/
-│   ├── public/
-│   │   ├── favicon.svg
-│   │   └── products/            # local static product images (SVG)
-│   ├── src/
-│   │   ├── App.tsx               # layout + route table
-│   │   ├── api.ts                 # fetch helpers, configurable API base URL
-│   │   ├── cart/CartContext.tsx   # cart state + localStorage persistence
-│   │   ├── components/
-│   │   │   ├── Header.tsx         # nav, search, cart icon/count
-│   │   │   └── ProductCard.tsx
-│   │   ├── pages/
-│   │   │   ├── Home.tsx           # hero + product grid + search filter
-│   │   │   ├── ProductDetail.tsx  # GET /api/products/{id}
-│   │   │   └── Cart.tsx
-│   │   ├── index.css              # hand-written CSS, no UI framework
-│   │   ├── main.tsx                # router + cart provider
-│   │   └── vite-env.d.ts
-│   ├── index.html
-│   ├── nginx.conf.template     # rendered at container start from env vars
-│   ├── package.json
-│   ├── tsconfig.json
-│   ├── vite.config.ts
-│   └── Dockerfile              # multi-stage: node build → nginx runtime
-│
-├── backend/
-│   ├── app/
-│   │   ├── main.py             # FastAPI app, endpoints, cache logic
-│   │   ├── config.py           # all config from environment variables
-│   │   ├── database.py         # engine, session, create tables + seed
-│   │   ├── models.py           # Product ORM model
-│   │   ├── schemas.py          # Pydantic response models
-│   │   └── redis_client.py     # Redis helpers, fail-soft
-│   ├── requirements.txt
-│   └── Dockerfile
-│
-├── docker-compose.yml
-├── .env.example
-├── .gitignore
-└── README.md
+poly-orchestrator-cluster
 ```
 
-## Technologies
+Two ECS services are deployed:
 
-| Tier    | Technology |
-|---------|------------|
-| Frontend | React 18, React Router, Vite, TypeScript, plain CSS, nginx (runtime) |
-| Backend  | Python 3.12, FastAPI, Uvicorn, SQLAlchemy 2.x, psycopg 3, redis-py |
-| Database | PostgreSQL 16 (official image) |
-| Cache    | Redis 7 (official image) |
-| Runtime  | Docker, Docker Compose |
+```text
+poly-orchestrator-frontend-service
+poly-orchestrator-backend-service
+```
 
-## Product images
+Both services run on **AWS Fargate** with a desired count of two tasks.
 
-Product images are plain SVG files committed under `frontend/public/products/` and
-served by nginx alongside the rest of the static build. The backend only stores a
-path (`image_url`, e.g. `/products/laptop.svg`); it never generates or proxies
-images. This keeps the demo fully self-contained — no external image host, no
-image-processing service, and no network dependency at build or run time.
+### Frontend Service
 
-## Running it
+```text
+Container: frontend
+Port: 3000
+Desired tasks: 2
+```
+
+The frontend serves the compiled React application using a lightweight Node.js server.
+
+### Backend Service
+
+```text
+Container: backend
+Port: 8000
+Desired tasks: 2
+```
+
+The FastAPI backend exposes:
+
+```text
+GET /health
+GET /api/products
+GET /api/products/{id}
+```
+
+### Health Checks
+
+The frontend is checked using:
+
+```text
+GET /
+```
+
+The backend is checked using:
+
+```text
+GET /health
+```
+
+These checks allow ECS and the ALB to determine whether tasks are healthy and ready to receive traffic.
+
+---
+
+# Traffic and Service Communication
+
+The Application Load Balancer provides the single public entry point.
+
+```text
+HTTP :80
+```
+
+Path-based routing is configured as:
+
+```text
+/api/*  → Backend ECS :8000
+/*      → Frontend ECS :3000
+```
+
+The frontend uses the relative API path:
+
+```text
+/api
+```
+
+This allows browser requests to use the same ALB endpoint as the frontend.
+
+ECS Service Connect provides internal communication between the frontend and backend:
+
+```text
+Frontend ECS
+     │
+     │ Service Connect
+     ▼
+Backend ECS
+```
+
+The backend then accesses the data services privately:
+
+```text
+Backend ECS → RDS PostgreSQL :5432
+Backend ECS → ElastiCache Redis :6379
+```
+
+The frontend does **not** connect directly to RDS or Redis.
+
+### ALB Listener
+
+![ALB Listener Rules](docs/screenshots/alb-listener.png)
+
+### Service Connect
+
+![ECS Service Connect](docs/screenshots/service-connect.png)
+
+---
+
+# Deployment Process
+
+## 1. Test Locally
+
+The application was first verified using Docker Compose:
 
 ```bash
-cp .env.example .env
 docker compose up --build
 ```
 
-Then open:
+This starts:
 
-- Frontend: <http://localhost:3000>
-- Backend health: <http://localhost:8000/health>
-- Products API: <http://localhost:8000/api/products>
+```text
+Frontend
+Backend
+PostgreSQL
+Redis
+```
+---
 
-Stop it:
+## 2. Provision AWS Infrastructure
+
+Terraform provisions the required AWS infrastructure:
 
 ```bash
-docker compose down          # stop and remove containers
-docker compose down -v       # also delete the PostgreSQL volume (fresh seed)
-```
+cd terraform
 
-Logs:
+terraform init
+terraform plan
+terraform apply
+```
+---
+
+## 3. Build and Push Images
+
+The application images are built locally and pushed to Amazon ECR.
 
 ```bash
-docker compose logs -f              # everything
-docker compose logs -f backend      # backend only — shows CACHE HIT / CACHE MISS
-docker compose ps                   # service + health status
+docker build -t poly-orchestrator-backend ./backend
+docker build -t poly-orchestrator-frontend ./frontend
 ```
 
-## Pages / routes (frontend)
+Example image tags:
 
-| Route            | Page                                                           |
-|-------------------|-----------------------------------------------------------------|
-| `/`               | Home — hero + product grid, client-side search over the loaded catalog |
-| `/products/:id`   | Product detail — image, price, description, stock, quantity selector, Add to Cart. Data comes from `GET /api/products/{id}`, nothing is hardcoded. |
-| `/cart`           | Shopping cart — line items, quantity controls, subtotal, empty-cart state |
-
-React Router handles client-side navigation; nginx falls back unmatched paths to
-`index.html` (`try_files … /index.html`) so refreshing `/products/3` or `/cart`
-directly still works.
-
-The cart itself is pure frontend state (React context + `localStorage`) — there is
-no cart/order table or endpoint on the backend.
-
-## API endpoints
-
-| Method | Path                 | Description |
-|--------|----------------------|-------------|
-| GET    | `/health`            | `{"status": "healthy"}` — for ECS/ALB health checks |
-| GET    | `/api/products`      | All products (Redis-cached, 60s TTL) |
-| GET    | `/api/products/{id}` | One product (Redis-cached), `404` if missing |
-| GET    | `/healthz`           | Frontend container's own health endpoint (nginx) |
-
-Interactive docs are available at <http://localhost:8000/docs>.
-
-## Database model
-
-One table, `products`:
-
-| Column        | Type          | Notes |
-|---------------|---------------|-------|
-| `id`          | integer, PK   | |
-| `name`        | varchar(120)  | |
-| `description` | text          | |
-| `price`       | numeric(10,2) | |
-| `image_url`   | varchar(255)  | Path to a static image served by the frontend, e.g. `/products/laptop.svg` |
-| `in_stock`    | boolean       | Drives the availability badge and disables Add to Cart when false |
-
-## How PostgreSQL is used
-
-- On startup the backend retries the connection for up to ~60 seconds (so a slow
-  database start is not fatal), calls `create_all()`, and — only if the table is
-  empty — inserts eight sample products: Aurora 14 Laptop, Wireless Mouse,
-  Mechanical Keyboard, 27" QHD Monitor, USB-C Hub, Wireless Headphones, HD Webcam,
-  and a Portable SSD (seeded as out-of-stock, to demonstrate that state).
-- No Alembic. For a single table in a lab app, migrations would be more machinery
-  than value.
-- Data lives in the `postgres_data` named volume, so it survives `docker compose down`.
-  Because the schema gained `image_url` / `in_stock` columns in this revision, a
-  volume created by an older version of this app needs `docker compose down -v`
-  once before starting the new image (fresh columns need a fresh seed, not a
-  migration, in a lab app like this).
-
-## How Redis caching works
-
-- `GET /api/products` looks for the key `shopnow:products:all`; individual products
-  use `shopnow:products:{id}`.
-- On a miss the backend queries PostgreSQL, writes the JSON payload to Redis with
-  a 60-second TTL (`CACHE_TTL_SECONDS`), and returns it.
-- Every request logs which path it took:
-
-  ```text
-  CACHE MISS -> PostgreSQL (shopnow:products:all)
-  Cached shopnow:products:all for 60s
-  CACHE HIT  -> Redis (shopnow:products:all)
-  ```
-
-- Caching is fail-soft: if Redis is unreachable the backend logs a warning and
-  serves from PostgreSQL instead of erroring.
-
-Demo it during the lab:
-
-```bash
-curl -s localhost:8000/api/products > /dev/null   # CACHE MISS
-curl -s localhost:8000/api/products > /dev/null   # CACHE HIT
-docker compose logs backend | grep CACHE
+```text
+poly-orchestrator-backend:v1
+poly-orchestrator-frontend:v1
+poly-orchestrator-frontend:v2
 ```
 
-## Environment variables
+![ECR Images](docs/screenshots/ecr.png)
 
-Nothing infrastructure-specific is hard-coded — no `localhost` for PostgreSQL or
-Redis anywhere in the backend. That is what lets the same image point at RDS and
-ElastiCache later without a code change.
+---
 
-Backend:
+## 4. Deploy ECS Services
 
-| Variable | Local default | Purpose |
-|----------|---------------|---------|
-| `DATABASE_HOST` | `postgres` | Compose service name → later the RDS endpoint |
-| `DATABASE_PORT` | `5432` | |
-| `DATABASE_NAME` | `shopnow` | |
-| `DATABASE_USER` | `shopnow` | |
-| `DATABASE_PASSWORD` | `shopnow_local_dev` | **local development only** |
-| `REDIS_HOST` | `redis` | Compose service name → later the ElastiCache endpoint |
-| `REDIS_PORT` | `6379` | |
-| `REDIS_DB` | `0` | |
-| `CACHE_TTL_SECONDS` | `60` | Cache lifetime |
-| `CORS_ORIGINS` | `*` | Comma-separated allowed origins |
+Separate ECS task definitions were created for the frontend and backend.
 
-Frontend:
+The task definitions specify:
 
-| Variable | Local default | Purpose |
-|----------|---------------|---------|
-| `VITE_API_BASE_URL` (build arg) | empty | Empty = same-origin requests proxied by nginx. Set it only if the browser must call the backend directly. |
-| `BACKEND_HOST` (runtime) | `backend` | Upstream the nginx proxy forwards to |
-| `BACKEND_PORT` (runtime) | `8000` | |
-| `FRONTEND_PORT` (runtime) | `80` | Port nginx listens on |
-| `DNS_RESOLVER` (runtime) | `127.0.0.11` | Docker embedded DNS; on ECS awsvpc use `169.254.169.253` |
+* Container image
+* CPU and memory
+* Port mappings
+* Environment variables
+* Health checks
+* CloudWatch logging
+* IAM roles
 
-Host port mapping (`.env`): `BACKEND_PORT=8000`, `FRONTEND_HOST_PORT=3000`.
+The task definitions are used by the ECS services.
 
-`.env` is gitignored — only `.env.example` is committed, and its credentials are
-local-development placeholders.
+![ECS Services](docs/screenshots/ecs-services.png)
 
-## Health checks and startup ordering
+---
 
-- `postgres`: `pg_isready`
-- `redis`: `redis-cli ping`
-- `backend`: HTTP `GET /health` (the same endpoint an ALB target group will use)
-- `frontend`: HTTP `GET /healthz`
-- `backend` waits for `postgres` and `redis` to report **healthy**; on top of that
-  the backend retries the database connection itself, so a few seconds of
-  database warm-up never fails the stack.
-- nginx resolves the backend name per request (`resolver` + variable `proxy_pass`),
-  so restarting the backend does not require restarting the frontend.
+## 5. Configure Load Balancing
 
-## Ready for the next phase
+The ALB uses two target groups:
 
-- Both images are stateless and configured purely through environment variables.
-- The backend listens on `0.0.0.0:8000` under Uvicorn and runs as a non-root user.
-- The frontend ships a static build served by nginx — no dev server in the image.
-- `/health` is already the health-check contract for ECS and the ALB.
-- Nothing AWS-specific (no Terraform, no task definitions, no Cloud Map) is here yet;
-  that comes next.
+| Service  | Target Group                       | Port | Health Check |
+| -------- | ---------------------------------- | ---: | ------------ |
+| Frontend | `poly-orchestrator-frontend-v2-tg` | 3000 | `/`          |
+| Backend  | `poly-orchestrator-backend-tg`     | 8000 | `/health`    |
+
+---
+
+# Application Verification
+
+After deployment, the application was tested through the public ALB endpoint.
+
+### Frontend
+
+```text
+http://<ALB-DNS>/
+```
+
+### Backend API
+
+```text
+http://<ALB-DNS>/api/products
+```
+
+### Target Health
+
+Both frontend and backend target groups were checked to confirm that ECS tasks were registered and healthy.
+
+![Healthy Target Groups](docs/screenshots/target-health.png)
+
+![Running Application](docs/screenshots/application.png)
+
+---
+
+# Troubleshooting
+
+The deployment involved several issues that demonstrated important ECS and ALB concepts.
+
+## Frontend Nginx — 502 Bad Gateway
+
+The initial frontend image used Nginx to proxy `/api` requests to the backend.
+
+Although Service Connect was working, Nginx returned `502 Bad Gateway`.
+
+The frontend was simplified to serve the React application directly, while the ALB became responsible for API routing:
+
+```text
+/api/* → Backend
+/*     → Frontend
+```
+
+---
+
+## Frontend Target Health Timeout
+
+After moving the frontend to port `3000`, the ALB could not reach the frontend tasks.
+
+The missing rule was:
+
+```text
+ALB SG → ECS SG → TCP 3000
+```
+
+After adding the rule, the frontend targets became healthy.
+
+---
+
+## Backend Target Health Timeout
+
+The backend tasks were running, but the ALB reported that port `8000` was unhealthy.
+
+The missing rule was:
+
+```text
+ALB SG → ECS SG → TCP 8000
+```
+
+After adding the rule and deploying new backend tasks, the targets became healthy.
+
+---
+
+## Backend Target Group Had No Targets
+
+The backend target group initially had no registered targets because the ECS backend service was not associated with the target group.
+
+The service was updated to connect:
+
+```text
+backend:8000
+        ↓
+poly-orchestrator-backend-tg
+```
+
+ECS then registered the backend tasks.
+
+---
+
+# Lessons Learned
+
+### ALB 503 does not always mean the application is broken
+
+A `503 Service Unavailable` can occur when the ALB has no healthy targets.
+
+Checking target-group health is therefore an important troubleshooting step.
+
+### ECS and ALB configuration must align
+
+The following components must work together:
+
+```text
+Container port
+      ↓
+ECS port mapping
+      ↓
+ECS service
+      ↓
+Target group
+      ↓
+ALB listener
+      ↓
+Security group
+```
+
+A mismatch can prevent traffic from reaching the application.
+
+### Service Connect and ALB have different roles
+
+The ALB handles external browser traffic and path-based routing.
+
+Service Connect provides internal ECS service discovery and communication.
+
+### Managed services simplify the deployment
+
+RDS and ElastiCache replace the local PostgreSQL and Redis containers, allowing ECS to focus on the application containers.
+
+---
+
+# Project Structure
+
+```text
+poly-orchestrator-lab/
+│
+├── backend/
+│   ├── app/
+│   ├── Dockerfile
+│   └── requirements.txt
+│
+├── frontend/
+│   ├── src/
+│   ├── Dockerfile
+│   ├── package.json
+│   └── ...
+│
+├── terraform/
+│   ├── alb.tf
+│   ├── ecr.tf
+│   ├── elasticache.tf
+│   ├── rds.tf
+│   ├── security-groups.tf
+│   ├── vpc.tf
+│   └── ...
+│
+├── docker-compose.yml
+└── README.md
+```
+
+---
+
+# Next Step: EKS
+
+The next phase is to deploy the same application using **Amazon EKS**.
+
+The application architecture will remain largely the same:
+
+```text
+Frontend
+Backend
+RDS PostgreSQL
+ElastiCache Redis
+```
+
+The main difference will be the orchestration platform.
+
+### ECS
+
+```text
+AWS
+└── ECS
+    └── Fargate
+        ├── Frontend
+        └── Backend
+```
+
+### EKS
+
+```text
+AWS
+└── EKS
+    └── Kubernetes
+        ├── Frontend Deployment
+        └── Backend Deployment
+```
+
+This will allow the project to compare ECS/Fargate with Kubernetes running on EKS using the same application.
