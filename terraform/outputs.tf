@@ -77,3 +77,37 @@ output "redis_port" {
   description = "ElastiCache Redis port"
   value       = aws_elasticache_cluster.this.port
 }
+
+# --- ECS ---
+
+output "ecs_cluster_name" {
+  description = "ECS cluster name"
+  value       = aws_ecs_cluster.this.name
+}
+
+output "backend_target_group_arn" {
+  description = "Target group ARN the ECS backend service registers with"
+  value       = aws_lb_target_group.backend.arn
+}
+
+# --- EKS ---
+
+output "eks_cluster_name" {
+  description = "EKS cluster name - use with `aws eks update-kubeconfig`"
+  value       = module.eks.cluster_name
+}
+
+output "eks_cluster_endpoint" {
+  description = "EKS API server endpoint"
+  value       = module.eks.cluster_endpoint
+}
+
+output "eks_lb_controller_role_arn" {
+  description = "IAM role ARN for the AWS Load Balancer Controller's service account (IRSA)"
+  value       = module.lb_controller_irsa.iam_role_arn
+}
+
+output "eks_node_security_group_id" {
+  description = "Security group ID shared by EKS worker nodes"
+  value       = module.eks.node_security_group_id
+}
