@@ -1,9 +1,18 @@
-# ShopNow — AWS foundation (Terraform)
+# ShopNow — AWS infrastructure (Terraform)
 
-This provisions the AWS infrastructure that ECS Fargate will run on top of in the
-next phase. **It does not create any ECS resources** (cluster, task definitions,
-services, Service Connect, Cloud Map) — those are configured manually afterwards,
-by design, so the ECS concepts are learned hands-on rather than generated.
+This provisions the full AWS foundation plus **both** orchestrators: the network
+(VPC, subnets, ALB, ECR, RDS, ElastiCache, security groups), an ECS Fargate
+cluster with Service Connect (`ecs.tf`), and an EKS cluster with a managed node
+group and the IRSA role for the AWS Load Balancer Controller (`eks.tf`). See the
+root `README.md` for the full ECS and EKS deployment walkthrough, including the
+Kubernetes manifests in `../k8s/` (which this configuration doesn't apply -
+that's `kubectl`'s job, same as `docker push` is for the container images).
+
+An earlier version of this lab kept ECS out of Terraform deliberately, to learn
+the concepts hands-on via the console/CLI first. It's back in Terraform now so
+the whole stack - including ECS - can be torn down and rebuilt reproducibly
+(this rebuild is exactly what happened after a sandbox prune deleted
+everything the first version of this file's resources had created).
 
 ## Architecture
 
