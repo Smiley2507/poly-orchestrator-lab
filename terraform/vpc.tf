@@ -25,12 +25,19 @@ module "vpc" {
   enable_dns_support   = true
   enable_dns_hostnames = true
 
+  # kubernetes.io tags let EKS and the AWS Load Balancer Controller discover
+  # which subnets to use for the cluster / for internet-facing vs internal
+  # Ingress ALBs.
   public_subnet_tags = {
-    Tier = "public"
+    Tier                                          = "public"
+    "kubernetes.io/role/elb"                      = "1"
+    "kubernetes.io/cluster/${local.eks_cluster_name}" = "shared"
   }
 
   private_subnet_tags = {
-    Tier = "private"
+    Tier                                          = "private"
+    "kubernetes.io/role/internal-elb"             = "1"
+    "kubernetes.io/cluster/${local.eks_cluster_name}" = "shared"
   }
 
   tags = local.common_tags

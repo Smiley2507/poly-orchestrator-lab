@@ -1,5 +1,6 @@
 locals {
-  name_prefix = var.project_name
+  name_prefix      = var.project_name
+  eks_cluster_name = "${var.project_name}-eks"
 
   common_tags = {
     Project     = var.project_name
