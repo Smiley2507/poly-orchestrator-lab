@@ -1,0 +1,16 @@
+# Non-secret backend config. Same RDS/ElastiCache instances the ECS backend
+# uses (see terraform outputs rds_endpoint / redis_endpoint) - both
+# orchestrators share the data layer for this lab.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backend-config
+  namespace: shopnow
+data:
+  DATABASE_HOST: "poly-orchestrator-rds.cd6o2m0wcyj7.eu-west-1.rds.amazonaws.com"
+  DATABASE_PORT: "5432"
+  DATABASE_NAME: "shopnow"
+  DATABASE_USER: "shopnow"
+  REDIS_HOST: "poly-orchestrator-redis.fganyq.0001.euw1.cache.amazonaws.com"
+  REDIS_PORT: "6379"
+  CORS_ORIGINS: "*"
