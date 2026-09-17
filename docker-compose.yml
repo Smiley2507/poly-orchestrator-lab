@@ -54,21 +54,18 @@ services:
     build:
       context: ./frontend
       args:
-        # Empty => same-origin requests, proxied by nginx to the backend.
-        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
-    environment:
-      BACKEND_HOST: backend            # Compose service name
-      BACKEND_PORT: 8000
-      FRONTEND_PORT: 80
-      DNS_RESOLVER: 127.0.0.11         # Docker embedded DNS
+        # The frontend container is a plain static server (no reverse proxy),
+        # so it must call the backend directly here. In ECS/EKS the ALB/Ingress
+        # does path-based routing instead, so this stays empty in those builds.
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000}
     ports:
-      - "${FRONTEND_HOST_PORT:-3000}:80"
+      - "${FRONTEND_HOST_PORT:-3000}:3000"
     depends_on:
       backend:
         condition: service_started
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/healthz >/dev/null || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/ >/dev/null || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
