@@ -7,8 +7,9 @@ export type Product = {
   in_stock: boolean
 }
 
-// Configurable at build time. Empty string = same-origin relative requests,
-// which nginx proxies to the backend (Compose service name / ECS Service Connect).
+// Empty string = same-origin relative requests, routed to the backend by the
+// ALB/Ingress path rule in ECS and EKS. Set at build time for local Compose,
+// where there's no such router in front of the frontend container.
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '')
 
 export async function fetchProducts(): Promise<Product[]> {

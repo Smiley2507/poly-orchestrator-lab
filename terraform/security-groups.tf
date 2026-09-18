@@ -10,8 +10,6 @@
 # front of it in the chain - nothing but the ALB is reachable from 0.0.0.0/0, and
 # RDS/ElastiCache are never reachable from anywhere except the ECS tasks.
 
-# --- ALB security group ---
-# Public entry point: accepts HTTP from the internet, forwards to ECS tasks only.
 resource "aws_security_group" "alb" {
   name        = "${local.name_prefix}-alb-sg"
   description = "Internet-facing ALB - allows inbound HTTP from anywhere"
@@ -111,9 +109,6 @@ resource "aws_security_group_rule" "ecs_to_rds" {
   description              = "PostgreSQL from ECS tasks"
 }
 
-# --- ElastiCache security group ---
-# Only reachable from the ECS tasks and EKS worker nodes, never from the
-# internet.
 resource "aws_security_group" "redis" {
   name        = "${local.name_prefix}-redis-sg"
   description = "ElastiCache Redis - only reachable from ECS tasks"

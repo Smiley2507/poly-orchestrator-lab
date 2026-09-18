@@ -1,4 +1,3 @@
-"""Pydantic response schemas."""
 from pydantic import BaseModel, ConfigDict
 
 

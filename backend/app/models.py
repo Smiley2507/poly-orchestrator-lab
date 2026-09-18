@@ -1,4 +1,3 @@
-"""SQLAlchemy ORM models."""
 from sqlalchemy import Boolean, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
