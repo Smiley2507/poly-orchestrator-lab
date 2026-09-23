@@ -3,8 +3,8 @@
 ShopNow is a three-tier e-commerce app (Frontend, Backend API, PostgreSQL, Redis) deployed twice on AWS, once on **ECS Fargate** and once on **EKS**, to compare the two orchestrators side by side. Both deployments run the same container images and share the same RDS and ElastiCache instances — only the orchestration layer differs.
 
 > **Live demo URLs** (ephemeral, change on every redeploy)
-> - ECS: `http://poly-orchestrator-alb-2078397140.eu-west-1.elb.amazonaws.com/`
-> - EKS: `http://k8s-shopnow-e8672dfd39-59190178.eu-west-1.elb.amazonaws.com/`
+> - ECS: `http://poly-orchestrator-alb-738163693.eu-west-1.elb.amazonaws.com/`
+> - EKS: `http://k8s-shopnow-e8672dfd39-1012479965.eu-west-1.elb.amazonaws.com/`
 >
 > ```bash
 > terraform -chdir=terraform output -raw alb_dns_name
