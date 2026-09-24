@@ -4,11 +4,11 @@ ShopNow is a three-tier e-commerce app (Frontend, Backend API, PostgreSQL, Redis
 
 > **Live demo URLs** (ephemeral, change on every redeploy)
 > - ECS: `http://poly-orchestrator-alb-738163693.eu-west-1.elb.amazonaws.com/`
-> - EKS: `http://k8s-shopnow-e8672dfd39-1012479965.eu-west-1.elb.amazonaws.com/`
+> - EKS: `http://k8s-shopnow-shopnowg-0ddd7324c9-1767495191.eu-west-1.elb.amazonaws.com/`
 >
 > ```bash
 > terraform -chdir=terraform output -raw alb_dns_name
-> kubectl get ingress -n shopnow shopnow-ingress-frontend -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
+> kubectl get gateway shopnow-gateway -n shopnow -o jsonpath='{.status.addresses[0].value}'
 > ```
 
 ## Local Development
@@ -86,27 +86,32 @@ aws ecs describe-services --cluster poly-orchestrator-cluster \
 
 ![EKS architecture](docs/screenshots/eks-architecture-diagram.png)
 
-The frontend and backend each run as a Kubernetes Deployment on a managed EC2 node group. A `Service` gives each one a stable internal DNS name via CoreDNS. The AWS Load Balancer Controller watches an `Ingress` and provisions a public ALB with the same `/*` and `/api/*` routing as the ECS side.
+The frontend and backend each run as a Kubernetes Deployment on a managed EC2 node group. A `Service` gives each one a stable internal DNS name via CoreDNS. The AWS Load Balancer Controller watches a `Gateway` and `HTTPRoute` and provisions a public ALB with the same `/*` and `/api/*` routing as the ECS side.
 
 ### What we implemented
 
 * EKS cluster with a managed node group (2× t3.medium)
 * Frontend and backend Deployments, two pods each
 * ClusterIP Services for internal DNS-based discovery
-* AWS Load Balancer Controller + Ingress for external routing
+* AWS Load Balancer Controller + Gateway API (GatewayClass, Gateway, HTTPRoute) for external routing
 * Backend connects to the same RDS and ElastiCache instances as ECS
 
 ### How it was implemented
 
-The cluster, node group, and the IAM role for the AWS Load Balancer Controller are defined in `terraform/eks.tf`. Once the cluster is up, the controller is installed with Helm and the manifests in `k8s/` are applied directly with `kubectl`.
+The cluster, node group, and the IAM role for the AWS Load Balancer Controller are defined in `terraform/eks.tf`. Once the cluster is up, the Gateway API CRDs and the controller are installed, then the manifests in `k8s/` are applied directly with `kubectl`.
 
 ```bash
 aws eks update-kubeconfig --name poly-orchestrator-eks --region eu-west-1
+
+kubectl apply --server-side -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.1/standard-install.yaml
+
 helm install aws-load-balancer-controller <chart> -n kube-system \
   --set clusterName=poly-orchestrator-eks --set region=eu-west-1
 
 kubectl apply -f k8s/
 ```
+
+The AWS Load Balancer Controller supports Gateway API out of the box (it auto-detects the CRDs above at startup) — its own CRDs for target group and load balancer settings (`TargetGroupConfiguration`, `LoadBalancerConfiguration`) ship inside its Helm chart, so only the upstream Gateway API CRDs need installing separately.
 
 Service discovery needs no extra setup — any pod can already reach the backend by its Service name:
 
@@ -114,7 +119,7 @@ Service discovery needs no extra setup — any pod can already reach the backend
 kubectl exec -n shopnow deploy/frontend -- wget -qO- http://backend:8000/health
 ```
 
-The Ingress is split into two resources sharing one ALB (`alb.ingress.kubernetes.io/group.name`), because the frontend and backend need different health-check paths and that setting applies per Ingress, not per rule.
+Ingress used to need two objects sharing one ALB, because its `healthcheck-path` annotation applies per-Ingress, not per backend. Gateway API's `TargetGroupConfiguration` sets the health check per Service instead, so `k8s/30-gateway.yaml` needs only one `Gateway` and one `HTTPRoute` (with a `TargetGroupConfiguration` for each of the two Services).
 
 ![EKS workloads](docs/screenshots/eks-workloads.png)
 
@@ -136,11 +141,11 @@ The app kept serving traffic throughout on both, since each orchestrator always 
 
 | | ECS (Fargate) | EKS |
 |---|---|---|
-| Setup | Cluster, task defs and services are plain Terraform resources | Cluster, node group, IRSA role, and a separate Ingress controller to install |
+| Setup | Cluster, task defs and services are plain Terraform resources | Cluster, node group, IRSA role, and the Gateway API CRDs + LB controller to install |
 | Time to a running app | A few minutes — control plane is instant | 10-12 minutes — the EKS control plane alone takes 8-10 minutes to come up |
 | Compute | Serverless per task, no nodes to manage | EC2 node group you size and patch yourself |
 | Service discovery | Cloud Map / Service Connect, configured per service | Built in — any Service gets a DNS name from CoreDNS |
-| Load balancing | Native ALB integration on the service | Needs the AWS Load Balancer Controller to turn Ingress objects into ALBs |
+| Load balancing | Native ALB integration on the service | Needs the AWS Load Balancer Controller to turn Gateway/HTTPRoute objects into ALBs |
 | Scaling | ECS desired count / Application Auto Scaling | Deployment replicas / Horizontal Pod Autoscaler |
 | Self-healing | Scheduler replaces a stopped task in seconds | ReplicaSet replaces a deleted pod in seconds |
 | Portability | AWS-specific | Standard Kubernetes API, portable to other clusters |

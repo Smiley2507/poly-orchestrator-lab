@@ -67,7 +67,7 @@ terraform apply
 ## Teardown
 
 ```bash
-kubectl delete -f ../k8s/     # remove the Ingress first, so its ALB is cleaned up
+kubectl delete -f ../k8s/     # remove the Gateway/HTTPRoute first, so their ALB is cleaned up
 terraform destroy
 ```
 
