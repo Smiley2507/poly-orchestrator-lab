@@ -1,0 +1,96 @@
+# Gateway API instead of Ingress. Replaces the old design's two Ingress
+# objects sharing one ALB via group.name - that split existed only because
+# alb.ingress.kubernetes.io/healthcheck-path applies per-Ingress, not per
+# backend. TargetGroupConfiguration sets the health check per Service
+# instead, so one Gateway + one HTTPRoute is enough here.
+#
+# Requires the upstream Gateway API CRDs (GatewayClass/Gateway/HTTPRoute) to
+# be installed separately - see the EKS section in the root README. The AWS
+# Load Balancer Controller's own CRDs (LoadBalancerConfiguration,
+# TargetGroupConfiguration) already come bundled with its Helm chart.
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: alb
+spec:
+  controllerName: gateway.k8s.aws/alb
+  parametersRef:
+    group: gateway.k8s.aws
+    kind: LoadBalancerConfiguration
+    namespace: shopnow
+    name: shopnow-lb-config
+---
+apiVersion: gateway.k8s.aws/v1
+kind: LoadBalancerConfiguration
+metadata:
+  name: shopnow-lb-config
+  namespace: shopnow
+spec:
+  scheme: internet-facing
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: shopnow-gateway
+  namespace: shopnow
+spec:
+  gatewayClassName: alb
+  listeners:
+    - name: http
+      port: 80
+      protocol: HTTP
+      allowedRoutes:
+        namespaces:
+          from: Same
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: shopnow-route
+  namespace: shopnow
+spec:
+  parentRefs:
+    - name: shopnow-gateway
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api
+      backendRefs:
+        - name: backend
+          port: 8000
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: frontend
+          port: 3000
+---
+apiVersion: gateway.k8s.aws/v1
+kind: TargetGroupConfiguration
+metadata:
+  name: backend-tgconfig
+  namespace: shopnow
+spec:
+  targetReference:
+    name: backend
+  defaultConfiguration:
+    targetType: ip
+    healthCheckConfig:
+      healthCheckPath: /health
+      healthCheckProtocol: HTTP
+---
+apiVersion: gateway.k8s.aws/v1
+kind: TargetGroupConfiguration
+metadata:
+  name: frontend-tgconfig
+  namespace: shopnow
+spec:
+  targetReference:
+    name: frontend
+  defaultConfiguration:
+    targetType: ip
+    healthCheckConfig:
+      healthCheckPath: /
+      healthCheckProtocol: HTTP
